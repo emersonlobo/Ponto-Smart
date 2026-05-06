@@ -277,6 +277,16 @@ def add_sidebar_footer():
     </div>
     """, unsafe_allow_html=True)
 
+# --- Função para tocar o bipe de sucesso ---
+def play_success_beep():
+    beep_url = "https://actions.google.com/sounds/v1/alarms/beep_short.ogg"
+    audio_html = f"""
+        <audio autoplay="true" style="display:none;">
+            <source src="{beep_url}" type="audio/ogg">
+        </audio>
+    """
+    st.markdown(audio_html, unsafe_allow_html=True)
+
 # --- Verifica última ação do dia (UTC) ---
 def get_last_action_today(employee_id):
     start = _utc_today_start()
@@ -337,6 +347,9 @@ def kiosk_mode():
             hora_formatada = ts_local.strftime('%H:%M:%S')
             acao = last_entry['action'].capitalize()
             st.markdown(f"<div class='kiosk-message'>✅ {acao} registrada em {data_formatada} às {hora_formatada}!</div>", unsafe_allow_html=True)
+
+            # --- Toca o bipe de sucesso ---
+            play_success_beep()
 
             if st.button("📧 Enviar Comprovante por E-mail", key="btn_email_comprovante", type="primary", use_container_width=True):
                 if not emp.get('email'):
