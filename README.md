@@ -9,6 +9,12 @@ Um sistema digital de controle de ponto desenvolvido com **Streamlit**, **Supaba
 - **Geração de Relatórios:** PDF automático com histórico de ponto.
 - **Segurança:** Autenticação por PIN com bloqueio após tentativas inválidas.
 - **Trilha de Auditoria:** Registro de todas as correções e alterações.
+- **Modelo de assinatura:** foco em taxa mensal para o proprietário, sem cobrança por serviço dentro do aplicativo.
+
+## 💰 Modelo de Cobrança
+- Apenas uma taxa mensal paga pelo proprietário para manter o salão na plataforma.
+- Sem necessidade de pagamento por atendimento ou por serviços individuais.
+- Ofereça 1 mês de teste grátis para que clientes e salão possam conhecer o app e divulgar a novidade.
 
 ## 📋 Pré-requisitos
 
@@ -137,6 +143,7 @@ Modifique as funções `apply_kiosk_style()` e `apply_admin_style()` no arquivo 
 
 ## 📝 Notas Importantes
 
+- **Modelo de negócio:** o sistema foi pensado como ferramenta de gestão e controle interno, sem gateway de pagamento integrado.
 - **Portaria 671 (MTE):** Este sistema é uma ferramenta de controle gerencial interno e não substitui sistemas oficiais exigidos pela legislação brasileira.
 - **Backup:** Configure backups automáticos no Supabase.
 - **HTTPS:** Sempre use HTTPS em produção.

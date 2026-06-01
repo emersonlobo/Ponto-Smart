@@ -11,10 +11,20 @@ from utils import (
     send_email_with_attachment
 )
 
-# --- Configurações do Supabase ---
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# --- Configuração de página (deve ser antes de qualquer outro comando st)
+st.set_page_config(
+    page_title="Ponto Smart",
+    page_icon="⏰",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# --- Configurações do Supabase com Cache ---
+@st.cache_resource
+def init_supabase():
+    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+
+supabase: Client = init_supabase()
 
 # --- Fuso horário Brasil (ou fallback UTC) ---
 try:
@@ -32,6 +42,7 @@ def _utc_today_end():
     return start + timedelta(days=1) - timedelta(microseconds=1)
 
 # --- Seed inicial (com email) ---
+@st.cache_data(ttl=300)
 def seed_initial_data():
     existing_emp = supabase.from_('employees').select('*', count='exact').execute()
     if existing_emp.count == 0:
@@ -49,25 +60,65 @@ def seed_initial_data():
         ]
         for name, pin, email in fake_employees:
             supabase.from_('employees').insert({"name": name, "pin": pin, "email": email}).execute()
-        st.success("✅ 10 funcionários fictícios adicionados!")
 
     existing_admin = supabase.from_('admin').select('*', count='exact').execute()
     if existing_admin.count == 0:
         supabase.from_('admin').insert({"id": 1, "password": "admin123"}).execute()
 
-# --- Funções BD (employees com email) ---
+# --- Funções BD (employees com email) com CACHE e VALIDAÇÃO ---
+@st.cache_data(ttl=60)
 def get_employees():
-    return supabase.from_('employees').select('*').execute().data
+    """Retorna lista de funcionários sem duplicatas."""
+    employees = supabase.from_('employees').select('*').execute().data
+    # Remove duplicatas por PIN (mantém primeiro registro)
+    seen = set()
+    unique_employees = []
+    for emp in employees:
+        pin = emp.get('pin')
+        if pin not in seen:
+            seen.add(pin)
+            unique_employees.append(emp)
+    return unique_employees
 
 def get_employee_by_pin(pin):
+    """Obtém funcionário por PIN com validação."""
+    if not pin or not isinstance(pin, str) or len(pin) != 4:
+        return None
     res = supabase.from_('employees').select('*').eq('pin', pin).execute()
     return res.data[0] if res.data else None
 
 def get_employee_by_id(employee_id):
+    """Obtém funcionário por ID com validação."""
+    if not employee_id:
+        return None
     return supabase.from_('employees').select('*').eq('id', str(employee_id)).single().execute().data
 
 def add_employee(name, pin, email):
-    return supabase.from_('employees').insert({"name": name, "pin": pin, "email": email}).execute().data
+    """Adiciona funcionário com validação de duplicatas."""
+    # Validação de entrada
+    if not name or not name.strip():
+        st.error("Nome não pode estar vazio.")
+        return None
+    if not pin or len(pin) != 4 or not pin.isdigit():
+        st.error("PIN deve ter exatamente 4 dígitos.")
+        return None
+    if not email or "@" not in email:
+        st.error("E-mail inválido.")
+        return None
+    
+    # Verifica se PIN já existe
+    existing = supabase.from_('employees').select('*').eq('pin', pin).execute()
+    if existing.data:
+        st.error(f"PIN {pin} já cadastrado para outro funcionário!")
+        return None
+    
+    # Verifica se nome já existe (duplicata)
+    existing_name = supabase.from_('employees').select('*').eq('name', name.strip()).execute()
+    if existing_name.data:
+        st.error(f"Funcionário '{name}' já existe no sistema!")
+        return None
+    
+    return supabase.from_('employees').insert({"name": name.strip(), "pin": pin, "email": email}).execute().data
 
 def update_employee_pin(employee_id, new_pin):
     return supabase.from_('employees').update({"pin": new_pin}).eq('id', str(employee_id)).execute().data
@@ -95,6 +146,18 @@ def get_time_entries(employee_id=None, start_date=None, end_date=None):
     return query.execute().data
 
 def add_time_entry(employee_id, action):
+    """Adiciona registro de ponto com validação."""
+    # Validação
+    if not employee_id:
+        return None
+    if action not in ['entrada', 'saida']:
+        return None
+    
+    # Verifica se funcionário existe
+    emp = get_employee_by_id(employee_id)
+    if not emp:
+        return None
+    
     return supabase.from_('time_entries').insert({
         "employee_id": str(employee_id),
         "action": action,
@@ -102,6 +165,10 @@ def add_time_entry(employee_id, action):
     }).execute().data
 
 def update_time_entry(entry_id, new_timestamp, new_action, corrected_by, reason):
+    """Atualiza registro de ponto com validação."""
+    if not entry_id or not new_timestamp or new_action not in ['entrada', 'saida']:
+        return None
+    
     return supabase.from_('time_entries').update({
         "timestamp": new_timestamp.isoformat(),
         "action": new_action,
@@ -563,9 +630,13 @@ def admin_panel():
                     if ent:
                         df_emp = pd.DataFrame(ent)
                         df_emp['timestamp'] = pd.to_datetime(df_emp['timestamp'], format='ISO8601', utc=True)
-                        all_entries.append((nome, df_emp))
+                    else:
+                        # Cria DataFrame vazio para funcionários sem registros
+                        df_emp = pd.DataFrame(columns=['timestamp', 'action', 'employee_id'])
+                    all_entries.append((nome, df_emp))
+                
                 if not all_entries:
-                    st.warning("Nenhum registro no período.")
+                    st.warning("Nenhum funcionário registrado no sistema.")
                 else:
                     if baixar:
                         pdf_bytes = generate_all_employees_report(all_entries, start, end)

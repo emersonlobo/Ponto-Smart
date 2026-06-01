@@ -45,69 +45,92 @@ def calculate_total_hours(time_entries_df):
     return f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}"
 
 def generate_pdf_report(employee_name, time_entries_df, start_date, end_date):
-    """Relatório individual com tabela Data | Entrada | Saída | Horas trabalhadas."""
+    """Relatório individual otimizado para caber em uma página A4 (até 31 dias)."""
     time_entries_df['timestamp_local'] = time_entries_df['timestamp'].apply(_to_local_datetime)
     time_entries_df = time_entries_df.sort_values('timestamp_local')
     
-    daily_data = []
-    current_day = None
-    entry_time = None
+    daily_data = {}
+    current_entry_time = None
     
     for _, row in time_entries_df.iterrows():
         ts = row['timestamp_local']
         day = ts.date()
         action = row['action']
         
-        if day != current_day:
-            if entry_time is not None:
-                pass
-            current_day = day
-            entry_time = None
+        if day not in daily_data:
+            daily_data[day] = {'entrada': None, 'saida': None, 'horas': 0}
         
         if action == 'entrada':
-            entry_time = ts
-        elif action == 'saida' and entry_time is not None:
-            duration = ts - entry_time
-            hours_worked = duration.total_seconds() / 3600
-            daily_data.append({
-                'data': day,
-                'entrada': entry_time.strftime('%H:%M:%S'),
-                'saida': ts.strftime('%H:%M:%S'),
-                'horas': hours_worked
-            })
-            entry_time = None
+            if daily_data[day]['entrada'] is None:
+                daily_data[day]['entrada'] = ts
+            current_entry_time = ts
+        elif action == 'saida':
+            if daily_data[day]['saida'] is None:
+                daily_data[day]['saida'] = ts
+            if current_entry_time is not None:
+                duration = ts - current_entry_time
+                hours_worked = duration.total_seconds() / 3600
+                daily_data[day]['horas'] += hours_worked
+                current_entry_time = None
     
-    total_hours = sum(item['horas'] for item in daily_data)
+    daily_list = []
+    for day in sorted(daily_data.keys()):
+        data = daily_data[day]
+        entrada = data['entrada'].strftime('%H:%M') if data['entrada'] else "---"
+        saida = data['saida'].strftime('%H:%M') if data['saida'] else "---"
+        horas = data['horas']
+        daily_list.append({
+            'data': day,
+            'entrada': entrada,
+            'saida': saida,
+            'horas': horas
+        })
+    
+    total_hours = sum(item['horas'] for item in daily_list)
     total_hours_str = f"{int(total_hours)}:{int((total_hours % 1)*60):02d}"
     
-    pdf = FPDF()
+    # Layout otimizado para ocupar toda a página
+    pdf = FPDF(orientation='P', unit='mm', format='A4')
     pdf.add_page()
-    pdf.set_font("Arial", "B", 16)
-    pdf.cell(0, 10, f"Relatório de Ponto - {employee_name}", 0, 1, "C")
-    pdf.set_font("Arial", "", 12)
-    pdf.cell(0, 10, f"Período: {start_date.strftime('%d/%m/%Y')} a {end_date.strftime('%d/%m/%Y')}", 0, 1, "C")
-    pdf.ln(10)
     
-    if not daily_data:
-        pdf.cell(0, 10, "Nenhum registro completo (entrada+saída) no período.", 0, 1, "C")
+    # CABEÇALHO PRINCIPAL
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(0, 10, "RELATÓRIO DE PONTO", 0, 1, "C")
+    
+    pdf.set_font("Arial", "B", 14)
+    pdf.cell(0, 8, f"Funcionário: {employee_name}", 0, 1, "L")
+    
+    # Período
+    pdf.set_font("Arial", "", 11)
+    pdf.cell(0, 6, f"Período: {start_date.strftime('%d/%m/%Y')} a {end_date.strftime('%d/%m/%Y')}", 0, 1, "L")
+    
+    pdf.ln(3)
+    
+    if not daily_list:
+        pdf.set_font("Arial", "", 11)
+        pdf.cell(0, 6, "Nenhum registro no período.", 0, 1, "C")
     else:
+        # TABELA COM FONTE AUMENTADA
         pdf.set_font("Arial", "B", 10)
-        pdf.cell(40, 10, "Data", 1)
-        pdf.cell(40, 10, "Entrada", 1)
-        pdf.cell(40, 10, "Saída", 1)
-        pdf.cell(40, 10, "Horas Trabalhadas", 1, 1)
-        pdf.set_font("Arial", "", 10)
-        for item in daily_data:
-            pdf.cell(40, 10, item['data'].strftime('%d/%m/%Y'), 1)
-            pdf.cell(40, 10, item['entrada'], 1)
-            pdf.cell(40, 10, item['saida'], 1)
+        col_width = 47.5  # A4 com margens: ~190mm / 4 colunas
+        pdf.cell(col_width, 8, "Data", 1, 0, "C")
+        pdf.cell(col_width, 8, "Entrada", 1, 0, "C")
+        pdf.cell(col_width, 8, "Saída", 1, 0, "C")
+        pdf.cell(col_width, 8, "Horas", 1, 1, "C")
+        
+        pdf.set_font("Arial", "", 9)
+        for item in daily_list:
             horas = item['horas']
             h = int(horas)
             m = int((horas - h) * 60)
-            pdf.cell(40, 10, f"{h:02d}:{m:02d}", 1, 1)
-        pdf.ln(5)
+            pdf.cell(col_width, 7, item['data'].strftime('%d/%m/%Y'), 1, 0, "C")
+            pdf.cell(col_width, 7, item['entrada'], 1, 0, "C")
+            pdf.cell(col_width, 7, item['saida'], 1, 0, "C")
+            pdf.cell(col_width, 7, f"{h:02d}:{m:02d}", 1, 1, "C")
+        
+        pdf.ln(3)
         pdf.set_font("Arial", "B", 12)
-        pdf.cell(0, 10, f"Total de horas no período: {total_hours_str}", 0, 1, "L")
+        pdf.cell(0, 8, f"Total de horas no período: {total_hours_str}", 0, 1, "L")
     
     return bytes(pdf.output(dest='S'))
 
@@ -128,87 +151,158 @@ def generate_single_entry_pdf(employee, entry):
     return bytes(pdf.output(dest='S'))
 
 def generate_all_employees_report(employee_data_list, start_date, end_date):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", "B", 16)
-    pdf.cell(0, 10, "Relatório Geral de Ponto", 0, 1, "C")
-    pdf.set_font("Arial", "", 12)
-    pdf.cell(0, 10, f"Período: {start_date.strftime('%d/%m/%Y')} a {end_date.strftime('%d/%m/%Y')}", 0, 1, "C")
-    pdf.ln(5)
+    """Relatório geral com 1 funcionário por página, máximo 31 registros por página. Inclui TODOS os funcionários."""
+    pdf = FPDF(orientation='P', unit='mm', format='A4')
     
     summary_data = []
+    
     for nome, df in employee_data_list:
+        # Se o DataFrame está vazio, cria uma página indicando nenhum registro
+        if df.empty:
+            pdf.add_page()
+            
+            # CABEÇALHO PRINCIPAL
+            pdf.set_font("Arial", "B", 16)
+            pdf.cell(0, 10, "RELATÓRIO DE PONTO", 0, 1, "C")
+            
+            pdf.set_font("Arial", "B", 14)
+            pdf.cell(0, 8, f"Funcionário: {nome}", 0, 1, "L")
+            
+            # Período
+            pdf.set_font("Arial", "", 11)
+            pdf.cell(0, 6, f"Período: {start_date.strftime('%d/%m/%Y')} a {end_date.strftime('%d/%m/%Y')}", 0, 1, "L")
+            
+            pdf.ln(5)
+            
+            # Mensagem de nenhum registro
+            pdf.set_font("Arial", "", 12)
+            pdf.cell(0, 8, "Nenhum registro de ponto neste período", 0, 1, "C")
+            
+            summary_data.append((nome, 0))
+            continue
+        
         df['timestamp_local'] = df['timestamp'].apply(_to_local_datetime)
         df = df.sort_values('timestamp_local')
         
-        daily_data = []
-        current_day = None
-        entry_time = None
+        daily_data = {}
+        current_entry_time = None
         
         for _, row in df.iterrows():
             ts = row['timestamp_local']
             day = ts.date()
             action = row['action']
             
-            if day != current_day:
-                if entry_time is not None:
-                    pass
-                current_day = day
-                entry_time = None
+            if day not in daily_data:
+                daily_data[day] = {'entrada': None, 'saida': None, 'horas': 0}
             
             if action == 'entrada':
-                entry_time = ts
-            elif action == 'saida' and entry_time is not None:
-                duration = ts - entry_time
-                hours_worked = duration.total_seconds() / 3600
-                daily_data.append({
-                    'data': day,
-                    'entrada': entry_time.strftime('%H:%M:%S'),
-                    'saida': ts.strftime('%H:%M:%S'),
-                    'horas': hours_worked
-                })
-                entry_time = None
+                if daily_data[day]['entrada'] is None:
+                    daily_data[day]['entrada'] = ts
+                current_entry_time = ts
+            elif action == 'saida':
+                if daily_data[day]['saida'] is None:
+                    daily_data[day]['saida'] = ts
+                if current_entry_time is not None:
+                    duration = ts - current_entry_time
+                    hours_worked = duration.total_seconds() / 3600
+                    daily_data[day]['horas'] += hours_worked
+                    current_entry_time = None
         
-        total_hours = sum(item['horas'] for item in daily_data)
+        daily_list = []
+        for day in sorted(daily_data.keys()):
+            data = daily_data[day]
+            entrada = data['entrada'].strftime('%H:%M') if data['entrada'] else "---"
+            saida = data['saida'].strftime('%H:%M') if data['saida'] else "---"
+            horas = data['horas']
+            daily_list.append({
+                'data': day,
+                'entrada': entrada,
+                'saida': saida,
+                'horas': horas
+            })
+        
+        total_hours = sum(item['horas'] for item in daily_list)
         summary_data.append((nome, total_hours))
         
-        pdf.set_font("Arial", "B", 12)
-        pdf.cell(0, 10, f"Funcionário: {nome}", 0, 1, "L")
-        if not daily_data:
-            pdf.set_font("Arial", "", 10)
-            pdf.cell(0, 10, "Nenhum registro completo no período.", 0, 1, "L")
-        else:
-            pdf.set_font("Arial", "B", 10)
-            pdf.cell(40, 10, "Data", 1)
-            pdf.cell(40, 10, "Entrada", 1)
-            pdf.cell(40, 10, "Saída", 1)
-            pdf.cell(40, 10, "Horas Trabalhadas", 1, 1)
-            pdf.set_font("Arial", "", 10)
-            for item in daily_data:
-                pdf.cell(40, 10, item['data'].strftime('%d/%m/%Y'), 1)
-                pdf.cell(40, 10, item['entrada'], 1)
-                pdf.cell(40, 10, item['saida'], 1)
-                h = int(item['horas'])
-                m = int((item['horas'] - h) * 60)
-                pdf.cell(40, 10, f"{h:02d}:{m:02d}", 1, 1)
-            pdf.set_font("Arial", "B", 10)
-            total_horas_str = f"{int(total_hours)}:{int((total_hours % 1)*60):02d}"
-            pdf.cell(0, 10, f"Total do funcionário: {total_horas_str}", 0, 1, "L")
-        pdf.ln(5)
+        # Divide em páginas se tiver mais de 31 registros
+        records_per_page = 31
+        for page_num, i in enumerate(range(0, len(daily_list), records_per_page)):
+            pdf.add_page()
+            
+            page_daily_list = daily_list[i:i + records_per_page]
+            page_total = sum(item['horas'] for item in page_daily_list)
+            
+            # CABEÇALHO PRINCIPAL
+            pdf.set_font("Arial", "B", 16)
+            pdf.cell(0, 10, "RELATÓRIO DE PONTO", 0, 1, "C")
+            
+            pdf.set_font("Arial", "B", 14)
+            pdf.cell(0, 8, f"Funcionário: {nome}", 0, 1, "L")
+            
+            # Período
+            pdf.set_font("Arial", "", 11)
+            if len(daily_list) > records_per_page:
+                start_day = page_daily_list[0]['data'].strftime('%d/%m/%Y')
+                end_day = page_daily_list[-1]['data'].strftime('%d/%m/%Y')
+                pdf.cell(0, 6, f"Período: {start_day} a {end_day}", 0, 1, "L")
+            else:
+                pdf.cell(0, 6, f"Período: {start_date.strftime('%d/%m/%Y')} a {end_date.strftime('%d/%m/%Y')}", 0, 1, "L")
+            
+            pdf.ln(3)
+            
+            if not page_daily_list:
+                pdf.set_font("Arial", "", 11)
+                pdf.cell(0, 6, "Nenhum registro no período.", 0, 1, "C")
+            else:
+                # TABELA COM FONTE AUMENTADA
+                pdf.set_font("Arial", "B", 10)
+                col_width = 47.5  # A4 com margens: ~190mm / 4 colunas
+                pdf.cell(col_width, 8, "Data", 1, 0, "C")
+                pdf.cell(col_width, 8, "Entrada", 1, 0, "C")
+                pdf.cell(col_width, 8, "Saída", 1, 0, "C")
+                pdf.cell(col_width, 8, "Horas", 1, 1, "C")
+                
+                pdf.set_font("Arial", "", 9)
+                for item in page_daily_list:
+                    h = int(item['horas'])
+                    m = int((item['horas'] - h) * 60)
+                    pdf.cell(col_width, 7, item['data'].strftime('%d/%m/%Y'), 1, 0, "C")
+                    pdf.cell(col_width, 7, item['entrada'], 1, 0, "C")
+                    pdf.cell(col_width, 7, item['saida'], 1, 0, "C")
+                    pdf.cell(col_width, 7, f"{h:02d}:{m:02d}", 1, 1, "C")
+                
+                pdf.ln(2)
+                pdf.set_font("Arial", "B", 11)
+                page_total_str = f"{int(page_total)}:{int((page_total % 1)*60):02d}"
+                pdf.cell(0, 7, f"Total nesta página: {page_total_str}", 0, 1, "L")
+                
+                # Se for a última página deste funcionário, mostra total geral
+                if i + records_per_page >= len(daily_list) and total_hours != page_total:
+                    pdf.set_font("Arial", "B", 12)
+                    total_hours_str = f"{int(total_hours)}:{int((total_hours % 1)*60):02d}"
+                    pdf.cell(0, 7, f"TOTAL GERAL: {total_hours_str}", 0, 1, "L")
     
+    # PÁGINA DE RESUMO GERAL
     if summary_data:
         pdf.add_page()
         pdf.set_font("Arial", "B", 16)
-        pdf.cell(0, 10, "Resumo de Horas por Funcionário", 0, 1, "C")
-        pdf.ln(5)
-        pdf.set_font("Arial", "B", 12)
-        pdf.cell(80, 10, "Funcionário", 1)
-        pdf.cell(60, 10, "Total de Horas", 1, 1)
-        pdf.set_font("Arial", "", 12)
-        for nome, total in summary_data:
+        pdf.cell(0, 10, "RESUMO GERAL DE HORAS", 0, 1, "C")
+        
+        pdf.set_font("Arial", "", 11)
+        pdf.cell(0, 6, f"Período: {start_date.strftime('%d/%m/%Y')} a {end_date.strftime('%d/%m/%Y')}", 0, 1, "C")
+        pdf.ln(4)
+        
+        pdf.set_font("Arial", "B", 10)
+        col1_width = 100
+        col2_width = 90
+        pdf.cell(col1_width, 8, "Funcionário", 1, 0, "C")
+        pdf.cell(col2_width, 8, "Total de Horas", 1, 1, "C")
+        
+        pdf.set_font("Arial", "", 9)
+        for nome, total in sorted(summary_data):
             total_str = f"{int(total)}:{int((total % 1)*60):02d}"
-            pdf.cell(80, 10, nome, 1)
-            pdf.cell(60, 10, total_str, 1, 1)
+            pdf.cell(col1_width, 7, nome, 1, 0, "L")
+            pdf.cell(col2_width, 7, total_str, 1, 1, "C")
     
     return bytes(pdf.output(dest='S'))
 

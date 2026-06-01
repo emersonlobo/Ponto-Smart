@@ -2,6 +2,7 @@ CREATE TABLE employees (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name TEXT NOT NULL,
     pin TEXT NOT NULL,
+    email TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 

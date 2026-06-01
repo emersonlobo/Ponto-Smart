@@ -1,4 +1,5 @@
-streamlit
-supabase
-fpdf2
-pandas
+streamlit==1.28.0
+supabase==2.4.0
+fpdf2==2.7.0
+pandas==2.1.1
+python-dotenv==1.0.0

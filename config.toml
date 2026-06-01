@@ -14,3 +14,19 @@ level = "info"
 [server]
 port = 8501
 headless = true
+runOnSave = true
+maxUploadSize = 200
+enableCORS = true
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false
+serverAddress = "localhost"
+
+[cache]
+maxDiskCacheSize = 1
+cachedMessageExpirationSeconds = 3600
+diskCacheStaleness = 604800
+
+[client.toolbars]
+toolbarMode = "minimal"
