@@ -277,11 +277,10 @@ def add_sidebar_footer():
     </div>
     """, unsafe_allow_html=True)
 
-# --- Verifica última ação do dia (UTC) ---
-def get_last_action_today(employee_id):
-    start = _utc_today_start()
-    end = _utc_today_end()
-    entries = get_time_entries(employee_id=employee_id, start_date=start, end_date=end)
+# --- Verifica última ação (global) - CORREÇÃO AQUI ---
+def get_last_action(employee_id):
+    """Retorna a última ação registrada (entrada ou saída) independente da data."""
+    entries = get_time_entries(employee_id=employee_id)
     return entries[-1]['action'] if entries else None
 
 # --- Kiosk Mode (com rodapé na sidebar) ---
@@ -373,13 +372,15 @@ def kiosk_mode():
         add_sidebar_footer()
         return
 
-    last = get_last_action_today(emp['id'])
+    # ----- CORREÇÃO: usa a última ação global, não apenas do dia -----
+    last = get_last_action(emp['id'])  # nova função
+
     if last is None or last == 'saida':
         action = 'entrada'
         btn_label = "Registrar Entrada"
         btn_key = "btn_entrada"
         btn_type = "primary"
-    else:
+    else:  # last == 'entrada'
         action = 'saida'
         btn_label = "Registrar Saída"
         btn_key = "btn_saida"
