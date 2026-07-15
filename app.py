@@ -10,21 +10,16 @@ from utils import (
     generate_all_employees_report,
     send_email_with_attachment
 )
-
-# --- Configuração de página (deve ser antes de qualquer outro comando st)
+# --- CONFIGURAÇÃO DA PÁGINA (DEVE SER A PRIMEIRA CHAMADA) ---
 st.set_page_config(
-    page_title="Ponto Smart",
-    page_icon="⏰",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide",                     # conteúdo ocupa toda a largura da tela
+    initial_sidebar_state="collapsed"  # sidebar inicia recolhida
 )
 
-# --- Configurações do Supabase com Cache ---
-@st.cache_resource
-def init_supabase():
-    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
-
-supabase: Client = init_supabase()
+# --- Configurações do Supabase ---
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # --- Fuso horário Brasil (ou fallback UTC) ---
 try:
@@ -42,7 +37,6 @@ def _utc_today_end():
     return start + timedelta(days=1) - timedelta(microseconds=1)
 
 # --- Seed inicial (com email) ---
-@st.cache_data(ttl=300)
 def seed_initial_data():
     existing_emp = supabase.from_('employees').select('*', count='exact').execute()
     if existing_emp.count == 0:
@@ -60,65 +54,25 @@ def seed_initial_data():
         ]
         for name, pin, email in fake_employees:
             supabase.from_('employees').insert({"name": name, "pin": pin, "email": email}).execute()
+        st.success("✅ 10 funcionários fictícios adicionados!")
 
     existing_admin = supabase.from_('admin').select('*', count='exact').execute()
     if existing_admin.count == 0:
         supabase.from_('admin').insert({"id": 1, "password": "admin123"}).execute()
 
-# --- Funções BD (employees com email) com CACHE e VALIDAÇÃO ---
-@st.cache_data(ttl=60)
+# --- Funções BD (employees com email) ---
 def get_employees():
-    """Retorna lista de funcionários sem duplicatas."""
-    employees = supabase.from_('employees').select('*').execute().data
-    # Remove duplicatas por PIN (mantém primeiro registro)
-    seen = set()
-    unique_employees = []
-    for emp in employees:
-        pin = emp.get('pin')
-        if pin not in seen:
-            seen.add(pin)
-            unique_employees.append(emp)
-    return unique_employees
+    return supabase.from_('employees').select('*').execute().data
 
 def get_employee_by_pin(pin):
-    """Obtém funcionário por PIN com validação."""
-    if not pin or not isinstance(pin, str) or len(pin) != 4:
-        return None
     res = supabase.from_('employees').select('*').eq('pin', pin).execute()
     return res.data[0] if res.data else None
 
 def get_employee_by_id(employee_id):
-    """Obtém funcionário por ID com validação."""
-    if not employee_id:
-        return None
     return supabase.from_('employees').select('*').eq('id', str(employee_id)).single().execute().data
 
 def add_employee(name, pin, email):
-    """Adiciona funcionário com validação de duplicatas."""
-    # Validação de entrada
-    if not name or not name.strip():
-        st.error("Nome não pode estar vazio.")
-        return None
-    if not pin or len(pin) != 4 or not pin.isdigit():
-        st.error("PIN deve ter exatamente 4 dígitos.")
-        return None
-    if not email or "@" not in email:
-        st.error("E-mail inválido.")
-        return None
-    
-    # Verifica se PIN já existe
-    existing = supabase.from_('employees').select('*').eq('pin', pin).execute()
-    if existing.data:
-        st.error(f"PIN {pin} já cadastrado para outro funcionário!")
-        return None
-    
-    # Verifica se nome já existe (duplicata)
-    existing_name = supabase.from_('employees').select('*').eq('name', name.strip()).execute()
-    if existing_name.data:
-        st.error(f"Funcionário '{name}' já existe no sistema!")
-        return None
-    
-    return supabase.from_('employees').insert({"name": name.strip(), "pin": pin, "email": email}).execute().data
+    return supabase.from_('employees').insert({"name": name, "pin": pin, "email": email}).execute().data
 
 def update_employee_pin(employee_id, new_pin):
     return supabase.from_('employees').update({"pin": new_pin}).eq('id', str(employee_id)).execute().data
@@ -146,18 +100,6 @@ def get_time_entries(employee_id=None, start_date=None, end_date=None):
     return query.execute().data
 
 def add_time_entry(employee_id, action):
-    """Adiciona registro de ponto com validação."""
-    # Validação
-    if not employee_id:
-        return None
-    if action not in ['entrada', 'saida']:
-        return None
-    
-    # Verifica se funcionário existe
-    emp = get_employee_by_id(employee_id)
-    if not emp:
-        return None
-    
     return supabase.from_('time_entries').insert({
         "employee_id": str(employee_id),
         "action": action,
@@ -165,10 +107,6 @@ def add_time_entry(employee_id, action):
     }).execute().data
 
 def update_time_entry(entry_id, new_timestamp, new_action, corrected_by, reason):
-    """Atualiza registro de ponto com validação."""
-    if not entry_id or not new_timestamp or new_action not in ['entrada', 'saida']:
-        return None
-    
     return supabase.from_('time_entries').update({
         "timestamp": new_timestamp.isoformat(),
         "action": new_action,
@@ -344,12 +282,44 @@ def add_sidebar_footer():
     </div>
     """, unsafe_allow_html=True)
 
-# --- Verifica última ação do dia (UTC) ---
-def get_last_action_today(employee_id):
-    start = _utc_today_start()
-    end = _utc_today_end()
-    entries = get_time_entries(employee_id=employee_id, start_date=start, end_date=end)
+# --- Verifica última ação (global) - CORREÇÃO AQUI ---
+def get_last_action(employee_id):
+    """Retorna a última ação registrada (entrada ou saída) independente da data."""
+    entries = get_time_entries(employee_id=employee_id)
     return entries[-1]['action'] if entries else None
+
+
+def send_registration_receipt(emp, entry):
+    """Envia automaticamente o comprovante de registro para o e-mail cadastrado."""
+    ts = pd.to_datetime(entry['timestamp'], format='ISO8601', utc=True)
+    if FUSO_BR:
+        ts_local = ts.tz_convert(FUSO_BR)
+    else:
+        ts_local = ts
+
+    data_formatada = ts_local.strftime('%d/%m/%Y')
+    hora_formatada = ts_local.strftime('%H:%M:%S')
+    acao = entry['action'].capitalize()
+
+    if not emp.get('email'):
+        return False, "Funcionário não possui e-mail cadastrado. Contate o administrador."
+
+    pdf_bytes = generate_single_entry_pdf(emp, entry)
+    subject = f"Comprovante de {acao} - {data_formatada}"
+    body = f"""
+    Prezado(a) {emp['name']},
+
+    Segue em anexo o comprovante do seu registro de ponto.
+
+    Data: {data_formatada}
+    Hora: {hora_formatada}
+    Ação: {acao}
+
+    Atenciosamente,
+    Sistema Ponto Smart
+    """
+    filename = f"comprovante_{emp['name']}_{data_formatada}.pdf"
+    return send_email_with_attachment(emp['email'], subject, body, pdf_bytes, filename)
 
 # --- Kiosk Mode (com rodapé na sidebar) ---
 def kiosk_mode():
@@ -360,6 +330,10 @@ def kiosk_mode():
         st.session_state.show_pin_change = False
     if "just_registered" not in st.session_state:
         st.session_state.just_registered = False
+    if "registration_email_status" not in st.session_state:
+        st.session_state.registration_email_status = None
+    if "registration_email_message" not in st.session_state:
+        st.session_state.registration_email_message = None
 
     col1, col2, col3 = st.columns([1, 3, 1])
     with col2:
@@ -405,30 +379,13 @@ def kiosk_mode():
             acao = last_entry['action'].capitalize()
             st.markdown(f"<div class='kiosk-message'>✅ {acao} registrada em {data_formatada} às {hora_formatada}!</div>", unsafe_allow_html=True)
 
-            if st.button("📧 Enviar Comprovante por E-mail", key="btn_email_comprovante", type="primary", use_container_width=True):
-                if not emp.get('email'):
-                    st.error("Funcionário não possui e-mail cadastrado. Contate o administrador.")
+            email_status = st.session_state.get("registration_email_status")
+            email_message = st.session_state.get("registration_email_message")
+            if email_status is not None:
+                if email_status:
+                    st.success(email_message)
                 else:
-                    pdf_bytes = generate_single_entry_pdf(emp, last_entry)
-                    subject = f"Comprovante de {acao} - {data_formatada}"
-                    body = f"""
-                    Prezado(a) {emp['name']},
-
-                    Segue em anexo o comprovante do seu registro de ponto.
-
-                    Data: {data_formatada}
-                    Hora: {hora_formatada}
-                    Ação: {acao}
-
-                    Atenciosamente,
-                    Sistema Ponto Smart
-                    """
-                    filename = f"comprovante_{emp['name']}_{data_formatada}.pdf"
-                    sucesso, msg = send_email_with_attachment(emp['email'], subject, body, pdf_bytes, filename)
-                    if sucesso:
-                        st.success(f"✅ Comprovante enviado para {emp['email']}")
-                    else:
-                        st.error(f"❌ Falha no envio: {msg}")
+                    st.warning(email_message)
         else:
             st.error("Erro inesperado: registro não encontrado. Tente novamente.")
         st.write("")
@@ -440,13 +397,15 @@ def kiosk_mode():
         add_sidebar_footer()
         return
 
-    last = get_last_action_today(emp['id'])
+    # ----- CORREÇÃO: usa a última ação global, não apenas do dia -----
+    last = get_last_action(emp['id'])  # nova função
+
     if last is None or last == 'saida':
         action = 'entrada'
         btn_label = "Registrar Entrada"
         btn_key = "btn_entrada"
         btn_type = "primary"
-    else:
+    else:  # last == 'entrada'
         action = 'saida'
         btn_label = "Registrar Saída"
         btn_key = "btn_saida"
@@ -456,6 +415,18 @@ def kiosk_mode():
     with col1:
         if st.button(btn_label, key=btn_key, type=btn_type, use_container_width=True):
             add_time_entry(emp['id'], action)
+            latest_entries = get_time_entries(employee_id=emp['id'])
+            if latest_entries:
+                last_entry = latest_entries[-1]
+                sucesso, msg = send_registration_receipt(emp, last_entry)
+                st.session_state.registration_email_status = sucesso
+                st.session_state.registration_email_message = (
+                    f"✅ Comprovante enviado automaticamente para {emp['email']}"
+                    if sucesso else f"⚠️ Falha no envio automático: {msg}"
+                )
+            else:
+                st.session_state.registration_email_status = False
+                st.session_state.registration_email_message = "⚠️ Não foi possível localizar o registro recém-criado."
             st.session_state.just_registered = True
             st.rerun()
     with col2:
@@ -630,13 +601,9 @@ def admin_panel():
                     if ent:
                         df_emp = pd.DataFrame(ent)
                         df_emp['timestamp'] = pd.to_datetime(df_emp['timestamp'], format='ISO8601', utc=True)
-                    else:
-                        # Cria DataFrame vazio para funcionários sem registros
-                        df_emp = pd.DataFrame(columns=['timestamp', 'action', 'employee_id'])
-                    all_entries.append((nome, df_emp))
-                
+                        all_entries.append((nome, df_emp))
                 if not all_entries:
-                    st.warning("Nenhum funcionário registrado no sistema.")
+                    st.warning("Nenhum registro no período.")
                 else:
                     if baixar:
                         pdf_bytes = generate_all_employees_report(all_entries, start, end)
